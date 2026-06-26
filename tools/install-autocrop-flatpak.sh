@@ -23,6 +23,9 @@ flatpak override --user \
 
 flatpak kill "$app_id" >/dev/null 2>&1 || true
 
+# NixOS font symlinks can change underneath Flatpak's per-app fontconfig cache.
+flatpak run --command=fc-cache "$app_id" -f >/dev/null 2>&1 || true
+
 flatpak_home="$HOME/.var/app/$app_id"
 rm -rf \
   "$flatpak_home/cache/stremio/WebKitCache" \
