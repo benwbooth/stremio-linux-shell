@@ -88,6 +88,14 @@ impl Video {
             error!("Failed to set property {name}: {e}");
         }
     }
+
+    pub fn get_i64_property(&self, name: &str) -> Option<i64> {
+        self.mpv.borrow().get_property(name).ok()
+    }
+
+    pub fn get_string_property(&self, name: &str) -> Option<String> {
+        self.mpv.borrow().get_property(name).ok()
+    }
 }
 
 #[glib::object_subclass]

@@ -84,6 +84,30 @@ impl Video {
         widget.send_command(&name, &args);
     }
 
+    pub fn video_dimensions(&self) -> (i64, i64) {
+        let widget = self.imp();
+
+        (
+            widget.get_i64_property("width").unwrap_or(0),
+            widget.get_i64_property("height").unwrap_or(0),
+        )
+    }
+
+    pub fn detect_crop(&self) -> Option<(i64, i64, i64, i64)> {
+        let widget = self.imp();
+        let w = widget.get_string_property("vf-metadata/cropdetect/lavfi.cropdetect.w")?;
+        let h = widget.get_string_property("vf-metadata/cropdetect/lavfi.cropdetect.h")?;
+        let x = widget.get_string_property("vf-metadata/cropdetect/lavfi.cropdetect.x")?;
+        let y = widget.get_string_property("vf-metadata/cropdetect/lavfi.cropdetect.y")?;
+
+        Some((
+            w.parse().ok()?,
+            h.parse().ok()?,
+            x.parse().ok()?,
+            y.parse().ok()?,
+        ))
+    }
+
     pub fn observe_mpv_property(&self, name: String) {
         let widget = self.imp();
 

@@ -1,7 +1,15 @@
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::Duration,
+};
 
 use adw::{prelude::*, subclass::prelude::*};
-use gtk::glib::{self, Properties, clone};
+use gtk::{
+    gdk::{Key, ModifierType},
+    gio,
+    glib::{self, Properties, clone},
+};
 
 use crate::app::{
     config::{APP_ID, APP_NAME, URI_SCHEME},
@@ -17,6 +25,108 @@ use crate::app::{
 };
 
 const PRELOAD_SCRIPT: &str = include_str!("ipc/preload.js");
+const CROPDETECT_FILTER: &str = "@cropdetect";
+const AUTOCROP_FILTER: &str = "@autocrop";
+
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+enum CropState {
+    #[default]
+    None,
+    Detecting,
+    Cropped,
+}
+
+fn mpv_command(video: &Video, name: &str, args: &[&str]) {
+    video.send_mpv_command(
+        name.to_string(),
+        args.iter().map(|arg| arg.to_string()).collect(),
+    );
+}
+
+fn show_crop_text(video: &Video, text: &str, duration_ms: &str) {
+    mpv_command(video, "show-text", &[text, duration_ms]);
+}
+
+fn remove_crop_filters(video: &Video) {
+    mpv_command(video, "vf", &["remove", CROPDETECT_FILTER]);
+    mpv_command(video, "vf", &["remove", AUTOCROP_FILTER]);
+}
+
+fn apply_detected_crop(video: &Video, crop_state: &Cell<CropState>) {
+    if crop_state.get() != CropState::Detecting {
+        return;
+    }
+
+    match video.detect_crop() {
+        Some((w, h, x, y)) => {
+            let (vw, vh) = video.video_dimensions();
+
+            mpv_command(video, "vf", &["remove", CROPDETECT_FILTER]);
+
+            if w < vw || h < vh {
+                mpv_command(video, "vf", &["remove", AUTOCROP_FILTER]);
+                let filter = format!("{AUTOCROP_FILTER}:lavfi=[crop=w={w}:h={h}:x={x}:y={y}]");
+                mpv_command(video, "vf", &["add", &filter]);
+                show_crop_text(
+                    video,
+                    &format!("Crop: {w}x{h}+{x}+{y} (video: {vw}x{vh})"),
+                    "3000",
+                );
+                crop_state.set(CropState::Cropped);
+            } else {
+                show_crop_text(
+                    video,
+                    &format!("No bars detected (video: {vw}x{vh})"),
+                    "3000",
+                );
+                crop_state.set(CropState::None);
+            }
+        }
+        None => {
+            remove_crop_filters(video);
+            show_crop_text(video, "Crop: detection failed", "3000");
+            crop_state.set(CropState::None);
+        }
+    }
+}
+
+fn toggle_crop(video: &Video, crop_state: Rc<Cell<CropState>>) {
+    match crop_state.get() {
+        CropState::None => {
+            mpv_command(
+                video,
+                "vf",
+                &[
+                    "add",
+                    "@cropdetect:lavfi=[cropdetect=limit=64:round=2:skip=2:reset=0]",
+                ],
+            );
+            show_crop_text(video, "Detecting crop...", "2000");
+            crop_state.set(CropState::Detecting);
+            let crop_state = crop_state.clone();
+
+            glib::timeout_add_local_once(
+                Duration::from_secs(2),
+                clone!(
+                    #[weak]
+                    video,
+                    move || {
+                        apply_detected_crop(&video, &crop_state);
+                    }
+                ),
+            );
+        }
+        CropState::Detecting | CropState::Cropped => {
+            remove_crop_filters(video);
+            show_crop_text(video, "Crop: Off", "2000");
+            crop_state.set(CropState::None);
+        }
+    }
+}
+
+fn is_crop_shortcut(key: Key, modifiers: ModifierType) -> bool {
+    (key == Key::c || key == Key::C) && modifiers.contains(ModifierType::ALT_MASK)
+}
 
 #[derive(Properties, Default)]
 #[properties(wrapper_type = super::Application)]
@@ -78,6 +188,40 @@ impl ApplicationImpl for Application {
         window.set_property("decorations", self.decorations.get());
         window.set_underlay(&video);
         window.set_overlay(&webview);
+
+        let crop_state = Rc::new(Cell::new(CropState::None));
+        let crop_action = gio::SimpleAction::new("toggle-crop", None);
+        crop_action.connect_activate(clone!(
+            #[weak]
+            video,
+            #[strong]
+            crop_state,
+            move |_, _| {
+                toggle_crop(&video, crop_state.clone());
+            }
+        ));
+        window.add_action(&crop_action);
+        app.set_accels_for_action("win.toggle-crop", &["<Alt>c", "<Control><Alt>c"]);
+
+        let crop_key_controller = gtk::EventControllerKey::new();
+        crop_key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+        crop_key_controller.connect_key_pressed(clone!(
+            #[weak]
+            video,
+            #[strong]
+            crop_state,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |_, key, _, modifiers| {
+                if is_crop_shortcut(key, modifiers) {
+                    toggle_crop(&video, crop_state.clone());
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            }
+        ));
+        window.add_controller(crop_key_controller);
 
         video.connect_playback_started(clone!(
             #[weak]
@@ -146,6 +290,9 @@ impl ApplicationImpl for Application {
                         }
                         IpcEvent::Quit => {
                             app.quit();
+                        }
+                        IpcEvent::ToggleCrop => {
+                            toggle_crop(&video, crop_state.clone());
                         }
                         IpcEvent::Mpv(event) => match event {
                             IpcEventMpv::Observe(name) => video.observe_mpv_property(name),

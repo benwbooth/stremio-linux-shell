@@ -43,6 +43,7 @@ impl TryFrom<IpcMessageRequest> for IpcEvent {
 
                     match data {
                         Some(data) => match name {
+                            "toggle-crop" => Ok(IpcEvent::ToggleCrop),
                             "win-set-visibility" => {
                                 let data: IpcMessageRequestWinSetVisilibty =
                                     serde_json::from_value(data)
@@ -104,6 +105,7 @@ impl TryFrom<IpcMessageRequest> for IpcEvent {
                         },
                         None => match name {
                             "app-ready" => Ok(IpcEvent::Ready),
+                            "toggle-crop" => Ok(IpcEvent::ToggleCrop),
                             "quit" => Ok(IpcEvent::Quit),
                             method => Err(format!("Invalid method: {method}")),
                         },

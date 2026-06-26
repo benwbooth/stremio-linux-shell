@@ -17,6 +17,7 @@ pub enum IpcEvent {
     Init,
     Ready,
     Quit,
+    ToggleCrop,
     Fullscreen(bool),
     Visibility(bool),
     OpenMedia(String),
